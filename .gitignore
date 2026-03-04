@@ -1,0 +1,45 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+venv/
+ENV/
+env.bak
+env.lock
+
+# Logs
+logs/
+*.log
+
+# Data & Cache
+data/raw/*
+data/cache/*
+!data/raw/.gitkeep
+!data/cache/.gitkeep
+.pytest_cache/
+
+# Spark/Hadoop
+checkpoint/
+warehouse/
+spark-warehouse/
+metastore_db/
+derby.log
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+bootstrap_db.py
+tmp/
+*.webp
+*.png
+!architecture_preview.png

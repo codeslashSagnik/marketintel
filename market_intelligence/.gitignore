@@ -1,0 +1,56 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .gitignore — Market Intelligence Platform
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+*.whl
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Django
+staticfiles/
+media/
+*.sqlite3
+db.sqlite3
+
+# Logs & Data
+logs/*.log
+data/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Docker
+*.override.yml
