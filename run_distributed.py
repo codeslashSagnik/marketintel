@@ -21,10 +21,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-8s | 
 logger = logging.getLogger("dispatcher")
 
 def dispatch_jiomart():
-    logger.info("Dispatching JioMart tasks (Not yet refactored - stub)")
-    # catalog = discover() ...
-    # for city, zones in CITY_CONFIG.items():
-    #     scrape_jiomart_city.delay(city, zones, catalog)
+    logger.info("Dispatching JioMart tasks across all cities...")
+    for city, zones in CITY_CONFIG.items():
+        logger.info(f" -> Queuing JioMart task for {city}")
+        scrape_jiomart_city.delay(city, zones)
+
 
 def dispatch_bigbasket():
     logger.info("Dispatching BigBasket tasks across all cities...")

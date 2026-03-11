@@ -33,8 +33,10 @@ CREATE TABLE IF NOT EXISTS dim_product (
     product_name TEXT NOT NULL,
     brand        VARCHAR(200),
     variant      VARCHAR(200),
-    pack_size    VARCHAR(100),             -- Raw string as scraped, e.g. "500 g", "1 kg", "6 pcs"
-    pack_weight_g DECIMAL(10,2),           -- Normalized weight in grams (parsed from pack_size)
+    pack_size    VARCHAR(100),             -- Raw string as scraped, e.g. "500 g", "1 kg", "30 cm"
+    pack_weight_g DECIMAL(10,2),           -- Normalized weight in grams (NULL for non-weight units)
+    pack_value   DECIMAL(10,3),            -- Raw numeric quantity from pack_size (e.g. 30 for "30 cm")
+    pack_unit    VARCHAR(30),              -- Raw unit token e.g. 'g', 'kg', 'cm', 'pcs', 'tabs'
     category_l1  VARCHAR(200),
     category_l2  VARCHAR(200),
     category_l3  VARCHAR(200),
@@ -90,6 +92,38 @@ CREATE TABLE IF NOT EXISTS fact_weather_2026_02 PARTITION OF fact_daily_weather 
 CREATE TABLE IF NOT EXISTS fact_weather_2026_03 PARTITION OF fact_daily_weather FOR VALUES FROM ('2026-03-01') TO ('2026-04-01');
 CREATE TABLE IF NOT EXISTS fact_weather_2026_04 PARTITION OF fact_daily_weather FOR VALUES FROM ('2026-04-01') TO ('2026-05-01');
 CREATE TABLE IF NOT EXISTS fact_weather_2026_05 PARTITION OF fact_daily_weather FOR VALUES FROM ('2026-05-01') TO ('2026-06-01');
+
+
+-- ───────────────────────────────────────────────────────────
+--  AUDIT: Data Quality Log (ETL Model 5 Rejects & Flags)
+-- ───────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS data_quality_log (
+    id               BIGSERIAL PRIMARY KEY,
+    product_id       VARCHAR(64),
+    source_id        VARCHAR(20),
+    pincode          VARCHAR(10),
+    selling_price    DECIMAL(10,2),
+    mrp              DECIMAL(10,2),
+    quality_flag     VARCHAR(20),
+    rejection_reason TEXT,
+    snapshot_date    TIMESTAMP,
+    logged_at        TIMESTAMP DEFAULT NOW()
+);
+
+-- ───────────────────────────────────────────────────────────
+--  ML: Streaming Anomaly Predictions (ETL Model 2)
+-- ───────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS ml_predictions (
+    id                    BIGSERIAL PRIMARY KEY,
+    product_id            VARCHAR(64),
+    pincode               VARCHAR(10),
+    point_anomaly_score   DECIMAL(6,4),
+    trend_anomaly_score   DECIMAL(6,4),
+    is_anomaly            BOOLEAN,
+    anomaly_type          VARCHAR(30),
+    model_type            VARCHAR(50),
+    predicted_at          TIMESTAMP DEFAULT NOW()
+);
 
 
 -- ───────────────────────────────────────────────────────────

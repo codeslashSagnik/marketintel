@@ -12,7 +12,7 @@ Usage:
 import os
 import logging
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json
+from pyspark.sql.functions import col, from_json, to_timestamp
 
 from spark_etl.config import (
     KAFKA_BROKER, KAFKA_TOPIC_PATTERN, KAFKA_MAX_OFFSETS,
@@ -24,7 +24,11 @@ from spark_etl.transformations import (
     parse_timestamps, deduplicate, normalize, drop_invalid, detect_price_changes,
     parse_weather_payload, parse_pack_weight, compute_unit_price
 )
-from spark_etl.sinks import write_pricing_facts, write_weather_facts, write_alerts_to_kafka, upsert_dimensions
+from spark_etl.ml_models import apply_data_quality_rules, detect_streaming_anomalies
+from spark_etl.sinks import (
+    write_pricing_facts, write_weather_facts, write_alerts_to_kafka, 
+    upsert_dimensions, write_data_quality_logs, write_ml_predictions
+)
 
 # ── Logging ───────────────────────────────────────────────────
 logging.basicConfig(
@@ -42,6 +46,7 @@ def create_spark_session() -> SparkSession:
         .config("spark.sql.streaming.schemaInference", "true") \
         .config("spark.sql.shuffle.partitions", "6") \
         .config("spark.streaming.stopGracefullyOnShutdown", "true") \
+        .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.1") \
         .getOrCreate()
 
 
@@ -58,7 +63,9 @@ def build_pricing_stream(spark: SparkSession):
 
     parsed = raw \
         .select(from_json(col("value").cast("string"), PRODUCT_MESSAGE_SCHEMA).alias("data")) \
-        .select("data.*")
+        .select("data.*") \
+        .withColumn("scraped_at", to_timestamp(col("scraped_at")))
+
     return parsed
 
 
@@ -76,8 +83,21 @@ def process_pricing_batch(batch_df, batch_id):
     df = normalize(df)
     df = parse_pack_weight(df)
     df = compute_unit_price(df)
+    
+    # Generate product_id early for ML Models
+    from pyspark.sql.functions import md5, concat_ws, coalesce, lit
+    df = df.withColumn(
+        "product_id", 
+        md5(concat_ws("|", 
+            coalesce(col("product_name"), lit("")), 
+            coalesce(col("brand"), lit("")), 
+            coalesce(col("variant"), lit(""))
+        ))
+    )
 
     spark = batch_df.sparkSession
+    
+    # 1. Price Change Detection
     try:
         latest_prices = spark.read \
             .format("jdbc") \
@@ -91,22 +111,73 @@ def process_pricing_batch(batch_df, batch_id):
         df = detect_price_changes(df, latest_prices)
     except Exception as e:
         logger.warning(f"Price change detection skipped (DB unavailable?): {e}")
-        from pyspark.sql.functions import lit
         df = df.withColumn("price_change_pct", lit(None).cast("double"))
 
+    # 2. ML Layers (Data Quality + Anomaly Detection)
     try:
-        upsert_dimensions(df)
+        # Fetch 30-day stats for statistical ML models
+        stats_query = """
+        (SELECT product_id AS stat_product_id, pincode AS stat_pincode, 
+                AVG(selling_price) AS avg_price, STDDEV(selling_price) AS stddev_price 
+         FROM fact_pricing_snapshots 
+         WHERE scraped_at >= NOW() - INTERVAL '30 days' 
+         GROUP BY product_id, pincode) AS stats
+        """
+        stats_df = spark.read \
+            .format("jdbc") \
+            .option("url", JDBC_URL) \
+            .option("dbtable", stats_query) \
+            .option("user", JDBC_PROPERTIES["user"]) \
+            .option("password", JDBC_PROPERTIES["password"]) \
+            .option("driver", JDBC_PROPERTIES["driver"]) \
+            .load()
+    except Exception as e:
+        logger.warning(f"Could not load 30d stats. Using empty proxy. {e}")
+        from pyspark.sql.types import StructType, StructField, StringType, DoubleType
+        schema = StructType([
+            StructField("stat_product_id", StringType()),
+            StructField("stat_pincode", StringType()),
+            StructField("avg_price", DoubleType()),
+            StructField("stddev_price", DoubleType())
+        ])
+        stats_df = spark.createDataFrame([], schema)
+
+    # Apply Model 5: Data Quality
+    df = apply_data_quality_rules(df, stats_df)
+    
+    try:
+        write_data_quality_logs(df)
+    except Exception as e:
+        logger.error(f"[Pricing] Batch {batch_id}: DQ Log write failed: {e}")
+
+    # Isolate strictly 'clean' rows for downstream inference
+    clean_df = df.filter(col("quality_flag") == "clean")
+    
+    # Apply Model 2: Streaming Anomaly Detection
+    anomalies_df = detect_streaming_anomalies(clean_df, stats_df)
+
+    try:
+        write_ml_predictions(anomalies_df)
+    except Exception as e:
+        logger.error(f"[Pricing] Batch {batch_id}: ML Predictions write failed: {e}")
+
+    # 3. Sinks (only for non-rejected rows)
+    facts_df = df.filter(col("quality_flag") != "rejected")
+
+    try:
+        upsert_dimensions(facts_df)
     except Exception as e:
         logger.error(f"[Pricing] Batch {batch_id}: dimension upsert failed: {e}")
 
     try:
-        write_pricing_facts(df)
+        write_pricing_facts(facts_df)
         logger.info(f"[Pricing] Batch {batch_id}: wrote facts successfully.")
     except Exception as e:
         logger.error(f"[Pricing] Batch {batch_id}: PostgreSQL write failed: {e}")
 
+    # Pass the anomaly DF explicitly to ensure alert topics only get genuine anomalies
     try:
-        write_alerts_to_kafka(df, threshold_pct=10.0)
+        write_alerts_to_kafka(anomalies_df, threshold_pct=10.0)
     except Exception as e:
         logger.warning(f"[Pricing] Batch {batch_id}: alert publish failed: {e}")
 

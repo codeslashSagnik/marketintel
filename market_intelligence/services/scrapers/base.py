@@ -19,6 +19,22 @@ from market_intelligence.services.scrapers.kafka_producer import KafkaProducerWr
 
 logger = logging.getLogger("scrapers.base")
 
+
+def get_logger(name: str) -> logging.Logger:
+    """Return a pre-configured logger. Used by all scraper submodules."""
+    log = logging.getLogger(name)
+    if not log.handlers:
+        log.setLevel(logging.INFO)
+        fmt = logging.Formatter(
+            "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        sh = logging.StreamHandler()
+        sh.setFormatter(fmt)
+        log.addHandler(sh)
+    return log
+
+
 # ── Shared Directories ────────────────────────────────────────
 PROJECT_ROOT = Path("E:/cv projects/real_time-market-intelligence")
 DATA_DIR     = PROJECT_ROOT / "data"
@@ -136,15 +152,11 @@ class BaseScraper(ABC):
         return catalog
 
     def _publish_and_save(self, records: list, city: str, pincode: str):
-        """Dual-write: CSV (always) + Kafka (if enabled)."""
+        """Publish scraped records to Kafka only (no CSV output)."""
         if not records:
             return
-        df = pd.DataFrame(records, columns=PRODUCT_SCHEMA)
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        out = RAW_DIR / f"{self.SOURCE}_{city}_{pincode}_{ts}.csv"
-        df.to_csv(out, index=False, encoding="utf-8-sig")
-        self.logger.info(f"Saved {len(records)} records to {out}")
         self.kafka.publish_batch(records)
+        self.logger.info(f"Published {len(records)} records from {city}/{pincode} to Kafka")
 
     def run(self, city_config: dict = None) -> pd.DataFrame:
         """

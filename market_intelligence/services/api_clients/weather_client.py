@@ -12,9 +12,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import requests
 
-from services.scrapers.base import get_logger
+import logging
 
-logger = get_logger("services.api_clients.weather")
+logger = logging.getLogger("services.api_clients.weather")
 
 PROJECT_ROOT = Path("E:/cv projects/real_time-market-intelligence")
 CACHE_DIR    = PROJECT_ROOT / "data" / "cache"

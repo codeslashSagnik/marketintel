@@ -5,7 +5,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-from market_intelligence.services.scrapers.jiomart.config import JIOMART_CFG
+from services.scrapers.jiomart.config import JIOMART_CFG
 
 logger = logging.getLogger("scrapers.jiomart.catalog")
 
@@ -78,8 +78,9 @@ class JioMartCatalogManager:
                 for chk in checkboxes[:self.max_subcategories]:
                     val = chk.get("value")
                     if val:
+                        val = val.strip()
                         catalog.append({
-                            "category": l2,
+                            "category": l2.strip(),
                             "subcategory": val,
                             "url": search_url,
                             "l4_filter_value": val

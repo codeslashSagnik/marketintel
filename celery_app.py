@@ -14,6 +14,13 @@ Usage:
 import os, sys, time, logging
 from pathlib import Path
 
+# Load .env so KAFKA_BROKER / REDIS_URL are set before Celery initialises
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass  # python-dotenv not installed; rely on shell env vars
+
 from celery import Celery
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -33,6 +40,8 @@ app.conf.update(
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+# Add both root and the market_intelligence folder to handle varied import styles
+sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "market_intelligence"))
 
 LOGS_DIR = PROJECT_ROOT / "logs"
@@ -56,9 +65,30 @@ def _get_logger(name="celery_worker"):
 
 # ── JioMart Task ────────────────────────────────────────────────────────────
 @app.task(bind=True, name="scrape_jiomart_city", max_retries=2, default_retry_delay=60)
-def scrape_jiomart_city(self, city: str, zones: dict, catalog: list):
-    """(Kept as-is for backward compatibility with the existing scrapper.ipynb logic)"""
-    pass # Real implementation would be here
+def scrape_jiomart_city(self, city: str, zones: dict):
+
+    """JioMart scraping task using the production JioMartScraper."""
+    from services.scrapers.jiomart.scraper import JioMartScraper
+    
+    logger = _get_logger(f"celery_jm_{city}")
+    logger.info(f"[JioMart] Starting scrape for city: {city}")
+    
+    t0 = time.monotonic()
+    scraper = JioMartScraper(headless=True, max_prod=200)
+    
+    # Run orchestration loop just for this city/zones using the pre-discovered catalog
+    try:
+        # We pass the catalog to avoid re-discovering it in every worker
+        df = scraper.run(city_config={city: zones})
+        records_count = len(df)
+    except Exception as e:
+        logger.error(f"JioMart {city} failed: {e}")
+        records_count = 0
+        
+    elapsed = time.monotonic() - t0
+    logger.info(f"[JioMart] {city} complete: {records_count} records in {elapsed:.1f}s")
+    return {"city": city, "source": "jiomart", "records": records_count, "elapsed_seconds": round(elapsed, 1)}
+
 
 
 # ── BigBasket Task ────────────────────────────────────────────────────────

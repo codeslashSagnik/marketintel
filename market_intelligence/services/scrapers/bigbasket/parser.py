@@ -165,6 +165,16 @@ class BBProductParser:
                 if oos_text and ("notify" in oos_text.lower() or "out of stock" in oos_text.lower()):
                     in_stock = False
 
+                # ── Product URL ───────────────────────────
+                product_url = None
+                a_tag = item.find_parent("a") or item.select_one("a")
+                if a_tag and a_tag.get("href"):
+                    href = a_tag.get("href")
+                    if href.startswith("/"):
+                        product_url = "https://www.bigbasket.com" + href
+                    elif href.startswith("http"):
+                        product_url = href
+
                 records.append({
                     "source": self.source,
                     "city": city,
@@ -182,6 +192,7 @@ class BBProductParser:
                     "rating": rating,
                     "pack_size": pack_size,
                     "image_url": img_url,
+                    "product_url": product_url,
                     "scraped_at": ts
                 })
             except Exception as e:

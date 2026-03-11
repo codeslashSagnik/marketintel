@@ -29,18 +29,19 @@ def upsert_dimensions(batch_df: DataFrame):
     # Use lit("") to avoid issues if column doesn't exist. Actually, category_l1 might not exist in all schemas.
     cols = batch_df.columns
     if "category_l1" not in cols:
-        batch_df = batch_df.withColumn("category_l1", lit(None))
+        batch_df = batch_df.withColumn("category_l1", lit(None).cast("string"))
     
     dim_product = batch_df.withColumn(
         "product_id", 
         md5(concat_ws("|", 
+            coalesce(col("source"), lit("")),
             coalesce(col("product_name"), lit("")), 
             coalesce(col("brand"), lit("")), 
             coalesce(col("variant"), lit(""))
         ))
     ).select(
         "product_id", "product_name", "brand", "variant",
-        "pack_size", "pack_weight_g",
+        "pack_size", "pack_weight_g", "pack_value", "pack_unit",
         "category_l1", "category_l2", "category_l3",
         "image_url", "product_url"
     ).dropDuplicates(["product_id"])
@@ -88,13 +89,13 @@ def upsert_dimensions(batch_df: DataFrame):
             cur.execute("""
                 INSERT INTO dim_product (
                     product_id, product_name, brand, variant,
-                    pack_size, pack_weight_g,
+                    pack_size, pack_weight_g, pack_value, pack_unit,
                     category_l1, category_l2, category_l3, 
                     image_url, product_url, last_seen
                 )
                 SELECT 
                     product_id, product_name, brand, variant,
-                    pack_size, pack_weight_g,
+                    pack_size, pack_weight_g, pack_value, pack_unit,
                     category_l1, category_l2, category_l3, 
                     image_url, product_url, NOW()
                 FROM dim_product_staging
@@ -103,6 +104,8 @@ def upsert_dimensions(batch_df: DataFrame):
                     brand = EXCLUDED.brand,
                     pack_size = EXCLUDED.pack_size,
                     pack_weight_g = EXCLUDED.pack_weight_g,
+                    pack_value = EXCLUDED.pack_value,
+                    pack_unit = EXCLUDED.pack_unit,
                     category_l1 = EXCLUDED.category_l1,
                     category_l2 = EXCLUDED.category_l2,
                     category_l3 = EXCLUDED.category_l3,
@@ -126,6 +129,7 @@ def write_pricing_facts(batch_df: DataFrame):
     facts = batch_df.withColumn(
         "product_id", 
         md5(concat_ws("|", 
+            coalesce(col("source"), lit("")),
             coalesce(col("product_name"), lit("")), 
             coalesce(col("brand"), lit("")), 
             coalesce(col("variant"), lit(""))
@@ -169,9 +173,61 @@ def write_weather_facts(batch_df: DataFrame):
         .save()
 
 
+def write_data_quality_logs(batch_df: DataFrame):
+    """Write rejected or flagged records to the audit log."""
+    logs = batch_df.filter(col("quality_flag") != "clean")
+    if logs.isEmpty():
+        return
+        
+    logs = logs.withColumnRenamed("source", "source_id") \
+               .withColumnRenamed("scraped_at", "snapshot_date") \
+               .select(
+                   "product_id", "source_id", "pincode", "selling_price", "mrp", 
+                   "quality_flag", "rejection_reason", "snapshot_date"
+               )
+
+    logs.write \
+        .format("jdbc") \
+        .option("url", JDBC_URL) \
+        .option("dbtable", "data_quality_log") \
+        .option("user", JDBC_PROPERTIES["user"]) \
+        .option("password", JDBC_PROPERTIES["password"]) \
+        .option("driver", JDBC_PROPERTIES["driver"]) \
+        .mode("append") \
+        .save()
+
+
+def write_ml_predictions(batch_df: DataFrame):
+    """Write streaming anomaly scores for clean records."""
+    if batch_df.isEmpty():
+        return
+        
+    preds = batch_df.withColumn("model_type", lit("streaming_anomaly_v1")) \
+                    .select(
+                        "product_id", "pincode",
+                        "point_anomaly_score", "trend_anomaly_score", 
+                        "is_anomaly", "anomaly_type", "model_type"
+                    )
+    
+    preds.write \
+        .format("jdbc") \
+        .option("url", JDBC_URL) \
+        .option("dbtable", "ml_predictions") \
+        .option("user", JDBC_PROPERTIES["user"]) \
+        .option("password", JDBC_PROPERTIES["password"]) \
+        .option("driver", JDBC_PROPERTIES["driver"]) \
+        .mode("append") \
+        .save()
+
+
 def write_alerts_to_kafka(batch_df: DataFrame, threshold_pct: float = 10.0):
-    """Filter significant price changes and publish to Kafka alerts topic."""
+    """Filter significant price changes + anomalies and publish to Kafka alerts topic."""
+    cols = batch_df.columns
+    if "is_anomaly" not in cols:
+        batch_df = batch_df.withColumn("is_anomaly", lit(False))
+        
     alerts = batch_df.filter(
+        col("is_anomaly") & 
         col("price_change_pct").isNotNull() & 
         (spark_abs(col("price_change_pct")) > threshold_pct)
     )

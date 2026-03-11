@@ -5,7 +5,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from selenium import webdriver
 
-from market_intelligence.services.scrapers.jiomart.config import JIOMART_CFG
+from services.scrapers.jiomart.config import JIOMART_CFG
 
 logger = logging.getLogger("scrapers.jiomart.parser")
 
@@ -56,10 +56,10 @@ class JioMartProductParser:
                 if not name and wrapper: name = wrapper.get("title", "")
 
                 price_dom = item.select_one(self.cfg["price_sel"])
-                if price_dom and not price: price = self._clean_price(price_dom.text)
+                if price_dom and not price: price = self._clean_price(price_dom.get_text(separator=" ").strip())
 
                 mrp_dom = item.select_one(self.cfg["mrp_sel"])
-                if mrp_dom: mrp = self._clean_price(mrp_dom.text)
+                if mrp_dom: mrp = self._clean_price(mrp_dom.get_text(separator=" ").strip())
 
                 disc_dom = item.select_one(self.cfg["discount_sel"])
                 if disc_dom:
@@ -71,6 +71,10 @@ class JioMartProductParser:
                 if var_dom:
                     variant = var_dom.text.strip()
                     pack_size = variant
+
+                product_url = None
+                if wrapper and wrapper.get("href"):
+                    product_url = "https://www.jiomart.com" + wrapper.get("href")
 
                 if not img_url:
                     img_dom = item.select_one(self.cfg["img_container"] + " img")
@@ -87,7 +91,7 @@ class JioMartProductParser:
                     "category": cat_name, "subcategory": subcat_name, "product_name": name,
                     "brand": brand, "variant": variant, "current_price": price, "mrp": mrp,
                     "discount_percent": discount, "in_stock": in_stock, "rating": None,
-                    "pack_size": pack_size, "image_url": img_url, "scraped_at": ts,
+                    "pack_size": pack_size, "image_url": img_url, "product_url": product_url, "scraped_at": ts,
                 })
             except Exception as e:
                 continue
