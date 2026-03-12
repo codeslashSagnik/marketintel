@@ -14,9 +14,7 @@ import logging
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, to_timestamp
 
-from spark_etl.config import (
-    KAFKA_BROKER, KAFKA_TOPIC_PATTERN, KAFKA_MAX_OFFSETS,
-    JDBC_URL, JDBC_PROPERTIES,
+from spark_etl.config import KAFKA_BROKER, KAFKA_TOPIC_PATTERN, KAFKA_MAX_OFFSETS,JDBC_URL, JDBC_PROPERTIES,
     CHECKPOINT_DIR, TRIGGER_INTERVAL, WATERMARK_DELAY,
 )
 from spark_etl.schemas import PRODUCT_MESSAGE_SCHEMA, WEATHER_MESSAGE_SCHEMA
@@ -144,6 +142,28 @@ def process_pricing_batch(batch_df, batch_id):
 
     # Apply Model 5: Data Quality
     df = apply_data_quality_rules(df, stats_df)
+    
+    # --- Model 5: MLflow Tracking ---
+    try:
+        import mlflow
+        total_rows = df.count()
+        if total_rows > 0:
+            metrics = df.groupBy("quality_flag").count().collect()
+            clean_count = next((r["count"] for r in metrics if r["quality_flag"] == "clean"), 0)
+            rejected_count = next((r["count"] for r in metrics if r["quality_flag"] == "rejected"), 0)
+            flagged_count = next((r["count"] for r in metrics if r["quality_flag"] == "flagged"), 0)
+
+            mlflow.set_tracking_uri("sqlite:///mlflow.db")
+            mlflow.set_experiment("Data_Quality_Gatekeeper")
+            
+            with mlflow.start_run(run_name=f"stream_batch_{batch_id}"):
+                mlflow.log_metric("total_rows_processed", total_rows)
+                mlflow.log_metric("clean_rate", clean_count / total_rows)
+                mlflow.log_metric("rejected_rate", rejected_count / total_rows)
+                mlflow.log_metric("flagged_rate", flagged_count / total_rows)
+    except Exception as e:
+        logger.warning(f"[Pricing] Batch {batch_id}: MLflow logging failed: {e}")
+    # --------------------------------
     
     try:
         write_data_quality_logs(df)
